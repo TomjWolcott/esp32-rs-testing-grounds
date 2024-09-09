@@ -2,6 +2,13 @@ const camStream = document.getElementById('cam_stream');
 const connectButton = document.getElementById('connect_button');
 const browseButton = document.getElementById('browse_button');
 const debugText = document.getElementById('bt-debug');
+const takePictureButton = document.getElementById('take_picture');
+
+takePicture = true;
+
+takePictureButton.onclick = () => {
+    takePicture = true;
+}
 
 browseButton.onclick = () => {
     navigator.bluetooth.requestDevice({
@@ -35,43 +42,70 @@ connectButton.onclick = () => {
 async function handleConnection(server) {
     console.log("CONNECTED!!", server);
 
-    connectButton.innerHTML = "Reconnect";
-    connectButton.onclick = () => {
-        console.log("Time to reconnect!");
-        server.device.gatt.connect()
-            .then(handleConnection)
-            .catch(error => {
-                console.error("Reconnect", error);
-            });
-    }
+    let bytes = [];
+
+    // connectButton.innerHTML = "Reconnect";
+    // connectButton.onclick = () => {
+    //     console.log("Time to reconnect!");
+    //     server.device.gatt.connect()
+    //         .then(handleConnection)
+    //         .catch(error => {
+    //             console.error("Reconnect", error);
+    //         });
+    // }
 
     let response_characteristic = await server.getPrimaryService("78b92928-f562-49db-827c-e9d83659f4cf")
         .then(service => service.getCharacteristic("fe4eef47-ce72-49bc-be82-24f77e9037fd"))
 
     console.log("Get service");
-    let image_characteristics = await server.getPrimaryService("35e7a030-2cf5-45ff-89a5-851d06e29d1b")
-        .then(service => service.getCharacteristics("dfead557-6578-495d-85f2-74b8db8010f5"));
+    let image_characteristic = await server.getPrimaryService("35e7a030-2cf5-45ff-89a5-851d06e29d1b")
+        .then(service => service.getCharacteristic("dfead557-6578-495d-85f2-74b8db8010f5"));
 
     while (true) {
-        console.log("Read value", image_characteristics);
-        await image_characteristics.stopNotifications();
+        while (!takePicture) {
+            await new Promise(r => setTimeout(() => r(), 50));
+        }
+
+        takePicture = false;
+
+        console.log("Read value", image_characteristic);
+
+        let size = -1;
+        let num_chunks = 10000000;
 
         try {
-            let arrays = await Promise.all(image_characteristics.map(c => c.readValue()));
-            console.log("Arrays: ", arrays);
-            let bytes = arrays
-                .map(array => [...new Uint8Array(array.buffer)])
-                .filter(bytes => bytes.length > 0);
+            let i = 0;
 
-            console.log("Bytes1: ", [...bytes]);
-            // Sorts the messages into order
-            bytes.sort((a, b) => a[0] - b[0]);
-            console.log("Bytes2: ", [...bytes]);
+            while (i < num_chunks - 1) {
+                console.log("Sending response...");
+                await response_characteristic.writeValueWithResponse((new Uint8Array([0x00, 0x00])).buffer);
+                console.log("waiting for notification...");
+                await image_characteristic.stopNotifications();
+                // await new Promise(r =>
+                //     image_characteristic.addEventListener("characteristicvaluechanged", r)
+                // );
 
-            bytes = bytes.map(array => array.slice(1)).flat();
+                let chunk = new Uint8Array((await image_characteristic.readValue()).buffer);
+                i = chunk[0];
+                let splice_index = i * (size - 1) - 3;
 
-            console.log("Update image, ", bytes);
-            updateImageSource(bytes);
+                console.log(`Chunk ${i}:`, chunk);
+
+                if (i === 0) {
+                    size = chunk[1] | (chunk[2] << 8);
+                    num_chunks = chunk[3];
+                    chunk = chunk.slice(4);
+                    splice_index = 0;
+                } else {
+                    chunk = chunk.slice(1);
+                }
+
+                console.log(`Chunk ${i} of ${num_chunks}.  Splicing in at ${splice_index} deleting ${chunk.length} elements`, chunk, bytes);
+
+                bytes.splice(splice_index, chunk.length, ...chunk);
+
+                updateImageSource(bytes);
+            }
         } catch (err) {
             if (err.message.includes("connect")) {
                 console.log("Time to reconnect!");
@@ -85,20 +119,27 @@ async function handleConnection(server) {
                 console.error(err);
             }
         }
-
-        await new Promise((resolve, _) => setTimeout(() => resolve(), 300));
-        await response_characteristic.startNotification();
     }
 }
 
 function updateImageSource(bytes) {
-    let base64 = btoa(String.fromCharCode(
-        ...gridRgb565ToBmp888(bytes)
-    ));
+    let bmpBytes = gridRgb565ToBmp888(bytes);
+
+    // let base64 = btoa(arrayToBase64(gridRgb565ToBmp888(bytes)));
+    let base64 = btoa(String.fromCharCode(...gridRgb565ToBmp888(bytes)));
 
     camStream.setAttribute("src", `data:image/bmp;base64,${base64}`);
 }
 
+function arrayToBase64( array ) {
+    let binary = '';
+    let bytes = new Uint8Array( array );
+    let len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode( bytes[ i ] );
+    }
+    return window.btoa( binary );
+}
 
 /*
 * bytes (be): [
@@ -196,7 +237,7 @@ function gridRgb565ToBmp888(bytes) {
     console.log("width", width);
     console.log("height", height);
 
-    for (let i = 0; i < width; i += 2) {
+    for (let i = 0; i < width; i++) {
         for (let j = 0; j < height; j++) {
             let index = (i * width + j) * 2;
             let bits = (bytes[index] << 8) | bytes[index + 1];
