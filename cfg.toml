@@ -1,0 +1,4 @@
+[esp32-cam-testing-grounds]
+wifi_name = "Tom's iPhone"
+wifi_ssid = "172.20.10.1"
+wifi_password = "abcabcabcab"

@@ -1,6 +1,22 @@
 use std::time::Duration;
 use esp_idf_svc::hal::gpio::*;
+use esp_idf_svc::hal::prelude::Peripherals;
 use log::info;
+
+pub fn esc_main(peripherals: Peripherals) -> ! {
+    let mut bldc_driver = BldcDriver::new(
+        (peripherals.pins.gpio32, peripherals.pins.gpio0),
+        (peripherals.pins.gpio5, peripherals.pins.gpio18),
+        (peripherals.pins.gpio19, peripherals.pins.gpio21)
+    ).unwrap();
+
+    loop {
+        bldc_driver.send_sequence(
+            Duration::from_secs_f32(1e0),
+            Duration::from_secs_f32(9e0)
+        ).unwrap();
+    }
+}
 
 #[derive(Debug)]
 pub enum BldcPhase {
